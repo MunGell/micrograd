@@ -1,9 +1,11 @@
 // run this file with `deno test <file>`
 
-import { assertAlmostEquals, assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { assertAlmostEquals, assertEquals, assertStrictEquals, assertThrows } from "jsr:@std/assert";
 
 import Operand from "./operand.ts";
 import BackPropagation from "./backpropagation.ts";
+import Neuron from "./neuron.ts";
+import Layer from "./layer.ts";
 
 // ---------------------------------------------------------------------------
 // Operand: construction
@@ -407,4 +409,139 @@ Deno.test("backward: division loss shape f = (a / b) * c * g", () => {
     assertAlmostEquals(c.gradient, 2.5);
     assertAlmostEquals(a.gradient, 350 / 10);            // 35
     assertAlmostEquals(b.gradient, -350 * 5 / 100);      // -17.5
+});
+
+// ---------------------------------------------------------------------------
+// Neuron
+// ---------------------------------------------------------------------------
+
+Deno.test("Neuron constructor: splits parameters into weights and bias", () => {
+    const w1 = new Operand(2);
+    const w2 = new Operand(3);
+    const b = new Operand(5);
+    const n = new Neuron([w1, w2, b]);
+    assertEquals(n.weights.length, 2);
+    assertStrictEquals(n.weights[0], w1);
+    assertStrictEquals(n.weights[1], w2);
+    assertStrictEquals(n.bias, b);
+    assertEquals(n.parameters.length, 3);
+});
+
+Deno.test("Neuron activate: computes w·x + b", () => {
+    // 2*10 + 3*20 + 5 = 85
+    const n = new Neuron([new Operand(2), new Operand(3), new Operand(5)]);
+    const out = n.activate([new Operand(10), new Operand(20)]);
+    assertEquals(out.value, 85);
+    assertStrictEquals(n.activation, out);
+});
+
+Deno.test("Neuron activate: single weight and bias", () => {
+    // -4*3 + 2 = -10
+    const n = new Neuron([new Operand(-4), new Operand(2)]);
+    const out = n.activate([new Operand(3)]);
+    assertEquals(out.value, -10);
+});
+
+Deno.test("Neuron activate: bias-only neuron accepts empty input", () => {
+    const n = new Neuron([new Operand(7)]);
+    const out = n.activate([]);
+    assertEquals(out.value, 7);
+});
+
+Deno.test("Neuron activate: throws on input length mismatch", () => {
+    const n = new Neuron([new Operand(2), new Operand(3), new Operand(5)]);
+    assertThrows(() => n.activate([new Operand(1)]));
+    assertThrows(() => n.activate([new Operand(1), new Operand(2), new Operand(3)]));
+});
+
+Deno.test("Neuron activate: gradients flow to weights, inputs, and bias", () => {
+    const w1 = new Operand(2);
+    const w2 = new Operand(3);
+    const b = new Operand(5);
+    const x1 = new Operand(10);
+    const x2 = new Operand(20);
+    const n = new Neuron([w1, w2, b]);
+    const out = n.activate([x1, x2]);
+    BackPropagation.backward(out);
+    assertEquals(w1.gradient, 10); // d(out)/dw_i = x_i
+    assertEquals(w2.gradient, 20);
+    assertEquals(x1.gradient, 2);  // d(out)/dx_i = w_i
+    assertEquals(x2.gradient, 3);
+    assertEquals(b.gradient, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Layer
+// ---------------------------------------------------------------------------
+
+Deno.test("Layer constructor: one neuron per parameter row", () => {
+    const params = [
+        [new Operand(1), new Operand(2), new Operand(3)],
+        [new Operand(4), new Operand(5), new Operand(6)],
+    ];
+    const layer = new Layer(params);
+    assertEquals(layer.neurons.length, 2);
+    assertStrictEquals(layer.neurons[0].weights[0], params[0][0]);
+    assertStrictEquals(layer.neurons[0].bias, params[0][2]);
+    assertStrictEquals(layer.neurons[1].bias, params[1][2]);
+});
+
+Deno.test("Layer activate: feeds the same input vector to every neuron", () => {
+    // neuron 1: 1*10 + 2*20 + 3 = 53; neuron 2: 4*10 + 5*20 + 6 = 146
+    const layer = new Layer([
+        [new Operand(1), new Operand(2), new Operand(3)],
+        [new Operand(4), new Operand(5), new Operand(6)],
+    ]);
+    const outs = layer.activate([new Operand(10), new Operand(20)]);
+    assertEquals(outs.length, 2);
+    assertEquals(outs[0].value, 53);
+    assertEquals(outs[1].value, 146);
+    assertEquals(layer.activations.length, 2);
+});
+
+Deno.test("Layer activate: neuron count independent of input size", () => {
+    // 3 neurons over a 2-dimensional input; output width = neuron count
+    const layer = new Layer([
+        [new Operand(1), new Operand(0), new Operand(0)],
+        [new Operand(0), new Operand(1), new Operand(0)],
+        [new Operand(1), new Operand(1), new Operand(1)],
+    ]);
+    const outs = layer.activate([new Operand(4), new Operand(9)]);
+    assertEquals(outs.length, 3);
+    assertEquals(outs[0].value, 4);
+    assertEquals(outs[1].value, 9);
+    assertEquals(outs[2].value, 14);
+});
+
+Deno.test("Layer activate: throws when input length mismatches weight count", () => {
+    const layer = new Layer([[new Operand(1), new Operand(2), new Operand(3)]]); // 2 weights
+    assertThrows(() => layer.activate([new Operand(1)])); // 1 input
+});
+
+Deno.test("Layer activate: gradients reach only the backpropagated neuron's parameters", () => {
+    const w1 = new Operand(1);
+    const b1 = new Operand(0);
+    const w2 = new Operand(2);
+    const b2 = new Operand(0);
+    const x = new Operand(5);
+    const layer = new Layer([[w1, b1], [w2, b2]]);
+    const [o1] = layer.activate([x]);
+    BackPropagation.backward(o1);
+    assertEquals(w1.gradient, 5);
+    assertEquals(b1.gradient, 1);
+    assertEquals(w2.gradient, 0); // second neuron untouched by o1's backward
+    assertEquals(b2.gradient, 0);
+    assertEquals(x.gradient, 1);  // w1.value
+});
+
+Deno.test("Layer activate: shared input accumulates gradient across neurons", () => {
+    const x = new Operand(5);
+    const layer = new Layer([
+        [new Operand(1), new Operand(0)],
+        [new Operand(2), new Operand(0)],
+    ]);
+    const [o1, o2] = layer.activate([x]);
+    const sum = o1.add(o2);
+    BackPropagation.backward(sum);
+    assertEquals(x.gradient, 3); // w1 + w2
 });

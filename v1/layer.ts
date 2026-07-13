@@ -12,7 +12,7 @@ class Layer {
     }
 
     activate(input: Operand[]) {
-        this.activations = this.neurons.map((n, i) => n.activate(input));
+        this.activations = this.neurons.map(n => n.activate(input));
 
         return this.activations;
     }

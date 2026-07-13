@@ -4,7 +4,6 @@ class Neuron {
     parameters: Operand[];
     weights: Operand[];
     bias: Operand;
-    x?: Operand[];
     activation?: Operand;
 
     constructor(parameters: Operand[]) {
