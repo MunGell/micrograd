@@ -6,6 +6,7 @@ import Operand from "./operand.ts";
 import BackPropagation from "./backpropagation.ts";
 import Neuron from "./neuron.ts";
 import Layer from "./layer.ts";
+import MultiLayerPerceptron from "./multilayer-perceptron.ts";
 
 // ---------------------------------------------------------------------------
 // Operand: construction
@@ -590,4 +591,122 @@ Deno.test("Layer activate: shared input accumulates gradient across neurons", ()
     const sum = o1.add(o2);
     BackPropagation.backward(sum);
     assertEquals(x.gradient, 3); // w1 + w2
+});
+
+// ---------------------------------------------------------------------------
+// MultiLayerPerceptron
+// ---------------------------------------------------------------------------
+
+Deno.test("MLP constructor: builds layers with modes and Operand parameters", () => {
+    const mlp = new MultiLayerPerceptron([
+        { mode: "relu", neurons: [[1, -1, 0], [0.5, 0.5, 1]] },
+        { mode: "raw", neurons: [[2, 3, 1]] },
+    ]);
+    assertEquals(mlp.layers.length, 2);
+    assertEquals(mlp.layers[0].mode, "relu");
+    assertEquals(mlp.layers[1].mode, "raw");
+    assertEquals(mlp.layers[0].neurons.length, 2);
+    assertEquals(mlp.layers[1].neurons.length, 1);
+    assertEquals(mlp.layers[0].parameters[0][0].value, 1);   // numbers became Operands
+    assertEquals(mlp.layers[0].parameters[0][0].gradient, 0);
+    assertEquals(mlp.layers[1].parameters[0][2].value, 1);
+});
+
+Deno.test("MLP constructor: throws on unknown layer mode", () => {
+    assertThrows(
+        () => new MultiLayerPerceptron([{ mode: "sigmoid", neurons: [[1, 0]] }]),
+        Error,
+        "unknown layer mode: sigmoid",
+    );
+});
+
+Deno.test("MLP predict: single raw neuron computes w*x + b", () => {
+    const mlp = new MultiLayerPerceptron([
+        { mode: "raw", neurons: [[0.13, -0.42]] },
+    ]);
+    const out = mlp.predict([1]);
+    assertEquals(out.length, 1);
+    assertAlmostEquals(out[0].value, 0.13 * 1 - 0.42);
+    assertAlmostEquals(mlp.predict([5])[0].value, 0.13 * 5 - 0.42);
+});
+
+Deno.test("MLP predict: forward pass through relu hidden layer into raw output", () => {
+    // hidden: h1 = x1 - x2 (relu), h2 = x1 + x2 (relu); output: 2*h1 + 3*h2 + 1
+    const mlp = new MultiLayerPerceptron([
+        { mode: "relu", neurons: [[1, -1, 0], [1, 1, 0]] },
+        { mode: "raw", neurons: [[2, 3, 1]] },
+    ]);
+    // input [3, 5]: h1 = -2 -> 0 (dead relu), h2 = 8 -> 2*0 + 3*8 + 1 = 25
+    assertEquals(mlp.predict([3, 5])[0].value, 25);
+    // input [5, 3]: h1 = 2, h2 = 8 -> 2*2 + 3*8 + 1 = 29
+    assertEquals(mlp.predict([5, 3])[0].value, 29);
+});
+
+Deno.test("MLP predict: output width equals last layer's neuron count", () => {
+    const mlp = new MultiLayerPerceptron([
+        { mode: "relu", neurons: [[1, 0], [2, 0], [3, 0]] }, // 1 input -> 3 neurons
+        { mode: "raw", neurons: [[1, 1, 1, 0], [1, 0, 0, 0]] }, // 3 -> 2
+    ]);
+    const out = mlp.predict([2]);
+    assertEquals(out.length, 2);
+    assertEquals(out[0].value, 2 + 4 + 6); // sums all hidden activations
+    assertEquals(out[1].value, 2);         // picks the first one
+});
+
+Deno.test("MLP predict: throws on input width mismatch", () => {
+    const mlp = new MultiLayerPerceptron([
+        { mode: "raw", neurons: [[1, 1, 0]] }, // expects 2 inputs
+    ]);
+    assertThrows(() => mlp.predict([1]));
+    assertThrows(() => mlp.predict([1, 2, 3]));
+});
+
+Deno.test("MLP predict: repeated calls give consistent results", () => {
+    const mlp = new MultiLayerPerceptron([
+        { mode: "relu", neurons: [[1, 1, 0]] },
+        { mode: "raw", neurons: [[2, 1]] },
+    ]);
+    assertEquals(mlp.predict([1, 2])[0].value, 7);
+    assertEquals(mlp.predict([1, 2])[0].value, 7); // fresh graph, same weights
+});
+
+Deno.test("MLP gradients: backward reaches weights through stacked linear layers", () => {
+    // layer 1: y1 = 2x; layer 2: y2 = 3*y1 => y2 = 6x
+    const mlp = new MultiLayerPerceptron([
+        { mode: "raw", neurons: [[2, 0]] },
+        { mode: "raw", neurons: [[3, 0]] },
+    ]);
+    const [out] = mlp.predict([4]);
+    assertEquals(out.value, 24);
+    BackPropagation.backward(out);
+    const [w1, b1] = mlp.layers[0].parameters[0];
+    const [w2, b2] = mlp.layers[1].parameters[0];
+    assertEquals(w2.gradient, 8);  // d(out)/dw2 = y1 = 2*4
+    assertEquals(b2.gradient, 1);
+    assertEquals(w1.gradient, 12); // d(out)/dw1 = w2 * x = 3*4
+    assertEquals(b1.gradient, 3);  // d(out)/db1 = w2
+});
+
+Deno.test("MLP gradients: dead relu in hidden layer blocks its weights end-to-end", () => {
+    // hidden: h1 = x1 - x2 (dead for [3,5]), h2 = x1 + x2 (active)
+    const mlp = new MultiLayerPerceptron([
+        { mode: "relu", neurons: [[1, -1, 0], [1, 1, 0]] },
+        { mode: "raw", neurons: [[2, 3, 1]] },
+    ]);
+    const [out] = mlp.predict([3, 5]);
+    BackPropagation.backward(out);
+
+    const [w11, w12, b1] = mlp.layers[0].parameters[0]; // dead neuron
+    const [w21, w22, b2] = mlp.layers[0].parameters[1]; // active neuron
+    const [v1, v2, vb] = mlp.layers[1].parameters[0];   // output neuron
+
+    assertEquals(w11.gradient, 0); // everything behind the dead relu is blocked
+    assertEquals(w12.gradient, 0);
+    assertEquals(b1.gradient, 0);
+    assertEquals(w21.gradient, 3 * 3); // output weight (3) * x1
+    assertEquals(w22.gradient, 3 * 5); // output weight (3) * x2
+    assertEquals(b2.gradient, 3);
+    assertEquals(v1.gradient, 0); // relu'd h1
+    assertEquals(v2.gradient, 8); // relu'd h2
+    assertEquals(vb.gradient, 1);
 });
