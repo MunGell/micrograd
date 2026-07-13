@@ -1,6 +1,6 @@
-import modelWeights from './data/mlp.json';
+import modelWeights from './data/linear-regression.json' with { type: "json" };
 import MLP from './multilayer-perceptron.ts'
 
 const model = new MLP(modelWeights.layers);
 
-model.predict()
+console.log(model.predict([1])[0].value);

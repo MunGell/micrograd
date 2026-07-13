@@ -1,7 +1,7 @@
 import Operand from './operand.ts';
 import Neuron from './neuron.ts';
 
-type LayerMode = 'raw' | 'relu';
+export type LayerMode = 'raw' | 'relu';
 
 class Layer {
     parameters: Operand[][] = [[]];

@@ -1,0 +1,12 @@
+{
+  "format": "micrograd",
+  "version": 1,
+  "layers": [
+    {
+      "mode": "raw",
+      "neurons": [
+        [0.13, -0.42]
+      ]
+    }
+  ]
+}

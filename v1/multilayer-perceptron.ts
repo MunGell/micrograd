@@ -1,17 +1,22 @@
 import Operand from './operand.ts';
-import Layer from './layer.ts';
+import Layer, { LayerMode } from './layer.ts';
+
+type LayerData = {
+    mode: string
+    neurons: number[][]
+}
 
 class MultiLayerPerceptron {
     layers: Layer[];
 
-    constructor(weights) {
+    constructor(weights: LayerData[]) {
         this.layers = weights.map(layerData => new Layer(
             layerData.neurons.map(neuron => neuron.map(weight => new Operand(weight))),
-            layerData.mode
+            this._toLayerMode(layerData.mode)
         ));
     }
 
-    predict(input: Number[]) {
+    predict(input: number[]) {
         let nextInput = input.map(number => new Operand(number));
 
         this.layers.forEach(layer => {
@@ -19,6 +24,11 @@ class MultiLayerPerceptron {
         });
 
         return nextInput;
+    }
+
+    _toLayerMode(mode: string): LayerMode {
+        if (mode === 'raw' || mode === 'relu') return mode;
+        throw new Error(`unknown layer mode: ${mode}`);
     }
 }
 
