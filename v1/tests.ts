@@ -534,6 +534,52 @@ Deno.test("Layer activate: gradients reach only the backpropagated neuron's para
     assertEquals(x.gradient, 1);  // w1.value
 });
 
+Deno.test("Layer mode: defaults to raw and keeps negative activations linear", () => {
+    // neuron: -2*3 + 1 = -5, must NOT be clipped in raw mode
+    const layer = new Layer([[new Operand(-2), new Operand(1)]]);
+    assertEquals(layer.mode, "raw");
+    const outs = layer.activate([new Operand(3)]);
+    assertEquals(outs[0].value, -5);
+
+    const explicit = new Layer([[new Operand(-2), new Operand(1)]], "raw");
+    assertEquals(explicit.activate([new Operand(3)])[0].value, -5);
+});
+
+Deno.test("Layer relu mode: clips negative activations, keeps positive", () => {
+    // neuron 1: 1*5 + 0 = 5 (active); neuron 2: -1*5 + 0 = -5 (dead -> 0)
+    const layer = new Layer([
+        [new Operand(1), new Operand(0)],
+        [new Operand(-1), new Operand(0)],
+    ], "relu");
+    const outs = layer.activate([new Operand(5)]);
+    assertEquals(outs[0].value, 5);
+    assertEquals(outs[1].value, 0);
+});
+
+Deno.test("Layer relu mode: activations store the post-relu nodes", () => {
+    const layer = new Layer([[new Operand(1), new Operand(0)]], "relu");
+    const outs = layer.activate([new Operand(5)]);
+    assertStrictEquals(layer.activations[0], outs[0]); // returned === stored
+    assertEquals(outs[0].operation, "relu");           // graph goes through relu
+});
+
+Deno.test("Layer relu mode: gradients flow through active relu, blocked through dead", () => {
+    const w1 = new Operand(1);
+    const b1 = new Operand(0);
+    const w2 = new Operand(-1);
+    const b2 = new Operand(0);
+    const x = new Operand(5);
+    const layer = new Layer([[w1, b1], [w2, b2]], "relu");
+    const [o1, o2] = layer.activate([x]);
+    const sum = o1.add(o2);
+    BackPropagation.backward(sum);
+    assertEquals(w1.gradient, 5); // active path: d/dw1 = x
+    assertEquals(b1.gradient, 1);
+    assertEquals(w2.gradient, 0); // dead relu blocks everything behind it
+    assertEquals(b2.gradient, 0);
+    assertEquals(x.gradient, 1);  // only the active neuron's weight contributes
+});
+
 Deno.test("Layer activate: shared input accumulates gradient across neurons", () => {
     const x = new Operand(5);
     const layer = new Layer([
